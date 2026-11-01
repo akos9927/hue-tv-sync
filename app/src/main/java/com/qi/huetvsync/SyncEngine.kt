@@ -28,6 +28,7 @@ class SyncEngine(
         private const val HALF_BOX = 0.17f // each light reads a box about a third of the screen wide
         private const val SCREEN_HEIGHT_RATIO = 0.5625f // 16:9
         private const val DARK_LEVEL = 18 // out of 255: darker than this counts as a black bar
+        private const val TEST_STEP_NS = 1_500_000_000L
     }
 
     private val bridge = HueBridge(ip, appKey)
@@ -49,6 +50,8 @@ class SyncEngine(
     @Volatile private var running = false
     @Volatile private var paused = false
     @Volatile private var needsReconnect = false
+    @Volatile private var testStartNs = 0L
+    @Volatile private var testUntilNs = 0L
     private var sender: Thread? = null
     private var watchdog: Thread? = null
 
@@ -91,6 +94,13 @@ class SyncEngine(
 
     fun setPaused(p: Boolean) {
         paused = p
+    }
+
+    /** Lights each segment in turn for 1.5 s, in the order of the on-screen preview. */
+    fun startLayoutTest() {
+        val now = System.nanoTime()
+        testStartNs = now
+        testUntilNs = now + n * TEST_STEP_NS
     }
 
     // ---------------------------------------------------------------- capture side
@@ -269,9 +279,21 @@ class SyncEngine(
                     val alpha = if (t.smoothingMs <= 0) 1f else 1f - exp(-dt / (t.smoothingMs / 3000f))
                     for (i in current.indices) current[i] += (tgt[i] - current[i]) * alpha
                 }
-                val gamma = t.gammaTenths / 10f
-                val bri = t.brightness / 100f
-                for (i in current.indices) out[i] = current[i].coerceIn(0f, 1f).pow(gamma) * bri
+                if (now < testUntilNs) {
+                    val lit = ((now - testStartNs) / TEST_STEP_NS).toInt().coerceIn(0, n - 1)
+                    SyncState.testChannel = lit
+                    for (i in 0 until n) {
+                        val v = if (i == lit) 1f else 0f
+                        out[i * 3] = v
+                        out[i * 3 + 1] = v
+                        out[i * 3 + 2] = v
+                    }
+                } else {
+                    SyncState.testChannel = -1
+                    val gamma = t.gammaTenths / 10f
+                    val bri = t.brightness / 100f
+                    for (i in current.indices) out[i] = current[i].coerceIn(0f, 1f).pow(gamma) * bri
+                }
                 streamer.send(channelIds, out)
                 sentFrames.incrementAndGet()
                 updateStats(now)
@@ -299,6 +321,7 @@ class SyncEngine(
         SyncState.captureFps = 0f
         SyncState.sendFps = 0f
         SyncState.previewColors = null
+        SyncState.testChannel = -1
     }
 
     /** Every 10 s, checks the bridge still has our stream (another app may have taken over). */

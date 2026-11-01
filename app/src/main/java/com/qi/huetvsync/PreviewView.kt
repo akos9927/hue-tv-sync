@@ -26,6 +26,11 @@ class PreviewView(context: Context) : View(context) {
         textAlign = Paint.Align.CENTER
         textSize = 22f
     }
+    private val highlight = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 6f
+        color = Color.WHITE
+    }
     private val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(154, 163, 178)
         textAlign = Paint.Align.CENTER
@@ -57,6 +62,7 @@ class PreviewView(context: Context) : View(context) {
         }
         val cw = 1f - 2f * cl
         val ch = 1f - 2f * ct
+        val tested = SyncState.testChannel
         regions.forEachIndexed { i, r ->
             val left = (cl + r.left * cw) * w
             val right = (cl + r.right * cw) * w
@@ -71,8 +77,10 @@ class PreviewView(context: Context) : View(context) {
             } else {
                 Color.rgb(40, 44, 52)
             }
+            if (tested >= 0) fill.color = if (i == tested) Color.WHITE else Color.rgb(20, 22, 28)
             canvas.drawRect(left, top, right, bottom, fill)
-            canvas.drawRect(left, top, right, bottom, outline)
+            canvas.drawRect(left, top, right, bottom, if (i == tested) highlight else outline)
+            label.color = if (i == tested) Color.BLACK else Color.argb(220, 255, 255, 255)
             canvas.drawText(engine.area.channels[i].id.toString(), (left + right) / 2, (top + bottom) / 2 + 8f, label)
         }
     }

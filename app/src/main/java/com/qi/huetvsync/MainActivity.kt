@@ -133,7 +133,8 @@ class MainActivity : Activity() {
 
         startButton = button("Start syncing") { onStartClicked() }
         val stopButton = button("Stop") { onStopClicked() }
-        left.addView(hRow(startButton, stopButton).apply { setPadding(0, dp(14), 0, 0) })
+        val testButton = button("Test layout") { onTestLayout() }
+        left.addView(hRow(startButton, stopButton, testButton).apply { setPadding(0, dp(14), 0, 0) })
 
         left.addView(sectionTitle("Hue Bridge"))
         bridgeText = label(15f)
@@ -289,6 +290,11 @@ class MainActivity : Activity() {
 
     private fun onStopClicked() {
         startService(Intent(this, SyncService::class.java).setAction(SyncService.ACTION_STOP))
+    }
+
+    private fun onTestLayout() {
+        val engine = SyncState.engine ?: return message("Start syncing first, then run the test.")
+        engine.startLayoutTest()
     }
 
     private fun onFindBridge() {
