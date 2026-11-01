@@ -168,7 +168,10 @@ class MainActivity : Activity() {
             { Prefs.CAPTURE_METHOD_NAMES[prefs.captureMethod] },
             { prefs.captureMethod = (prefs.captureMethod + 1) % Prefs.CAPTURE_METHOD_NAMES.size },
             { prefs.captureMethod = (prefs.captureMethod + 1) % Prefs.CAPTURE_METHOD_NAMES.size }))
-        right.addView(stepper("Capture rate", "Higher is livelier but more work for the TV.",
+        right.addView(stepper("Screen copy", "Paused between reads means less work for the TV at low rates.",
+            { if (prefs.burst) "Paused between reads" else "Continuous" },
+            { prefs.burst = !prefs.burst }, { prefs.burst = !prefs.burst }))
+        right.addView(stepper("Capture rate", "With the copy paused between reads, lower is lighter for the TV.",
             { "${prefs.fps} fps" },
             { prefs.fps = Prefs.FPS_STEPS.lastOrNull { it < prefs.fps } ?: Prefs.FPS_STEPS.first() },
             { prefs.fps = Prefs.FPS_STEPS.firstOrNull { it > prefs.fps } ?: Prefs.FPS_STEPS.last() }))
@@ -235,7 +238,7 @@ class MainActivity : Activity() {
     private fun applyTuning() {
         val t = prefs.tuning()
         SyncState.engine?.updateTuning(t)
-        SyncState.capturer?.configure(t.captureMethod, t.sizeIndex, t.fps)
+        SyncState.capturer?.configure(t.captureMethod, t.sizeIndex, t.fps, t.burst)
     }
 
     // ------------------------------------------------------------------ live status

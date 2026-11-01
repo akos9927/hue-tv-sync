@@ -5,6 +5,7 @@ import android.content.Context
 /** Everything the sync loop needs to know about how to process colors. */
 data class Tuning(
     val captureMethod: Int,
+    val burst: Boolean,
     val fps: Int,
     val sizeIndex: Int,
     val smoothingMs: Int,
@@ -53,6 +54,9 @@ class Prefs(context: Context) {
     var captureMethod: Int
         get() = sp.getInt("captureMethod", 0)
         set(v) = putInt("captureMethod", v.coerceIn(0, CAPTURE_METHOD_NAMES.size - 1))
+    var burst: Boolean
+        get() = sp.getBoolean("burst", true)
+        set(v) = putBool("burst", v)
     var fps: Int
         get() = sp.getInt("fps", 15)
         set(v) = putInt("fps", v.coerceIn(2, 30))
@@ -94,6 +98,7 @@ class Prefs(context: Context) {
 
     fun tuning() = Tuning(
         captureMethod = captureMethod,
+        burst = burst,
         fps = fps,
         sizeIndex = sizeIndex,
         smoothingMs = smoothingMs,

@@ -148,7 +148,7 @@ class SyncService : Service() {
                     }
                     capturer = cap
                     SyncState.capturer = cap
-                    cap.start(tuning.captureMethod, tuning.sizeIndex, tuning.fps)
+                    cap.start(tuning.captureMethod, tuning.sizeIndex, tuning.fps, tuning.burst)
                     registerScreenReceiver()
                 }
             } catch (e: Exception) {

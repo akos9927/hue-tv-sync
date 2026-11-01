@@ -11,6 +11,7 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.projection.MediaProjection
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Process
@@ -30,6 +31,10 @@ import kotlin.math.roundToInt
  *
  * One virtual display is kept for the whole session; switching method or size only swaps
  * the surface it draws into.
+ *
+ * Bursts: with [burst] on, the copy is only connected for the moment a frame is read and is
+ * disconnected in between, so the TV stops mirroring itself between reads. A lower capture
+ * rate then really means less work for the TV.
  */
 class ScreenCapturer(
     private val projection: MediaProjection,
@@ -46,6 +51,10 @@ class ScreenCapturer(
 
         /** Encoder picture width per quality step, for the Codec method. */
         val CODEC_SIZES = intArrayOf(320, 640, 1280)
+
+        private const val BURST_POLL_MS = 15L
+        private const val CODEC_MIN_BURST_MS = 60L
+        private const val MAX_BURST_MS = 300L
     }
 
     private val thread = HandlerThread("HueCapture", Process.THREAD_PRIORITY_BACKGROUND).apply { start() }
@@ -54,6 +63,12 @@ class ScreenCapturer(
     private var display: VirtualDisplay? = null
     @Volatile private var running = false
     @Volatile private var fps = 15
+    @Volatile private var burst = true
+
+    // The surface the copy draws into while connected
+    private var sinkSurface: Surface? = null
+    private var attached = false
+    private var burstStart = 0L
 
     // What is currently built
     private var mode = -1
@@ -75,8 +90,9 @@ class ScreenCapturer(
     private val encInfo = MediaCodec.BufferInfo()
     private val decInfo = MediaCodec.BufferInfo()
 
-    fun start(method: Int, sizeIndex: Int, fps: Int) {
+    fun start(method: Int, sizeIndex: Int, fps: Int, burst: Boolean) {
         this.fps = fps.coerceIn(1, 60)
+        this.burst = burst
         handler.post {
             running = true
             build(method, sizeIndex)
@@ -85,12 +101,14 @@ class ScreenCapturer(
     }
 
     /** Applies new settings while running; rebuilds the copy only when something structural changed. */
-    fun configure(method: Int, sizeIndex: Int, fps: Int) {
+    fun configure(method: Int, sizeIndex: Int, fps: Int, burst: Boolean) {
         this.fps = fps.coerceIn(1, 60)
+        this.burst = burst
         handler.post {
             if (!running) return@post
             val fpsMatters = method == METHOD_CODEC && fps != builtFps
             if (method != mode || sizeIndex != this.sizeIndex || fpsMatters) build(method, sizeIndex)
+            updateInfo()
         }
     }
 
@@ -118,6 +136,7 @@ class ScreenCapturer(
         outH = gh
         rgb = ByteArray(gw * gh * 3)
         sizeIndex = idx
+        attached = false
         try {
             if (method == METHOD_CODEC) {
                 buildCodec(idx)
@@ -150,7 +169,9 @@ class ScreenCapturer(
         val r = ImageReader.newInstance(outW, outH, PixelFormat.RGBA_8888, 2)
         reader = r
         attach(r.surface, outW, outH)
-        SyncState.captureInfo = "Standard, ${outW}×$outH"
+        infoBase = "Standard, ${outW}×$outH"
+        decoderName = ""
+        updateInfo()
     }
 
     private fun buildCodec(idx: Int) {
@@ -162,10 +183,13 @@ class ScreenCapturer(
         attach(surface, cw, ch)
         enc.start()
         builtFps = fps
-        SyncState.captureInfo = "Codec, ${cw}×$ch"
+        infoBase = "Codec, ${cw}×$ch"
+        decoderName = ""
+        updateInfo()
     }
 
     private fun attach(surface: Surface, w: Int, h: Int) {
+        sinkSurface = surface
         val d = display
         if (d == null) {
             display = projection.createVirtualDisplay(
@@ -177,6 +201,71 @@ class ScreenCapturer(
             d.resize(w, h, dpi)
             d.surface = surface
         }
+        attached = true
+        if (burst) disconnect()
+    }
+
+    private fun connect() {
+        if (attached) return
+        val s = sinkSurface ?: return
+        display?.surface = s
+        attached = true
+        if (mode == METHOD_CODEC) {
+            // Start each burst with a key frame so the decoder never needs older frames.
+            try {
+                encoder?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** Stops the TV mirroring itself and throws away anything left over from this burst. */
+    private fun disconnect() {
+        if (!attached) return
+        try {
+            display?.surface = null
+        } catch (_: Exception) {
+        }
+        attached = false
+        try {
+            reader?.acquireLatestImage()?.close()
+        } catch (_: Exception) {
+        }
+        encoder?.let { enc ->
+            try {
+                while (true) {
+                    val idx = enc.dequeueOutputBuffer(encInfo, 0)
+                    if (idx == MediaCodec.INFO_TRY_AGAIN_LATER) break
+                    if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        if (decoder == null) decoder = createDecoder(enc.outputFormat)
+                        continue
+                    }
+                    if (idx >= 0) enc.releaseOutputBuffer(idx, false)
+                }
+            } catch (_: Exception) {
+            }
+        }
+        decoder?.let { dec ->
+            try {
+                while (true) {
+                    val idx = dec.dequeueOutputBuffer(decInfo, 0)
+                    if (idx == MediaCodec.INFO_TRY_AGAIN_LATER) break
+                    if (idx >= 0) dec.releaseOutputBuffer(idx, false)
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private var infoBase = ""
+    private var decoderName = ""
+
+    private fun updateInfo() {
+        if (infoBase.isEmpty()) return
+        val parts = mutableListOf(infoBase)
+        if (decoderName.isNotEmpty()) parts += decoderName
+        parts += if (burst) "copy paused between reads" else "continuous copy"
+        SyncState.captureInfo = parts.joinToString(" · ")
     }
 
     private fun releaseSink() {
@@ -184,6 +273,8 @@ class ScreenCapturer(
             display?.surface = null
         } catch (_: Exception) {
         }
+        attached = false
+        sinkSurface = null
         try {
             reader?.close()
         } catch (_: Exception) {
@@ -263,36 +354,65 @@ class ScreenCapturer(
         val dec = if (software != null) MediaCodec.createByCodecName(software.name) else MediaCodec.createDecoderByType(AVC)
         dec.configure(format, null, null, 0)
         dec.start()
-        SyncState.captureInfo = (SyncState.captureInfo.substringBefore(" ·")) + " · " + (software?.name ?: "hardware decoder")
+        decoderName = software?.name ?: "hardware decoder"
+        updateInfo()
         return dec
     }
 
     // ------------------------------------------------------------------ reading
 
+    private fun safeRead(): Boolean = try {
+        when (mode) {
+            METHOD_STANDARD -> readStandard()
+            METHOD_CODEC -> readCodec()
+            else -> false
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "Frame read failed", e)
+        false
+    }
+
+    /** Runs once per frame interval: either reads the continuous copy, or starts a burst. */
     private val tick = object : Runnable {
         override fun run() {
             if (!running) return
             val start = SystemClock.uptimeMillis()
-            try {
-                when (mode) {
-                    METHOD_STANDARD -> readStandard()
-                    METHOD_CODEC -> readCodec()
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Frame read failed", e)
+            if (!burst || mode < 0) {
+                connect()
+                safeRead()
+                val wait = 1000L / fps - (SystemClock.uptimeMillis() - start)
+                handler.postDelayed(this, max(1L, wait))
+                return
             }
-            val wait = 1000L / fps - (SystemClock.uptimeMillis() - start)
-            handler.postDelayed(this, max(1L, wait))
+            burstStart = start
+            connect()
+            handler.postDelayed(burstPoll, BURST_POLL_MS)
         }
     }
 
-    private fun readStandard() {
-        val r = reader ?: return
+    /** During a burst: read until a fresh frame arrives, then disconnect until the next interval. */
+    private val burstPoll = object : Runnable {
+        override fun run() {
+            if (!running) return
+            val got = safeRead()
+            val elapsed = SystemClock.uptimeMillis() - burstStart
+            val minBurst = if (mode == METHOD_CODEC) CODEC_MIN_BURST_MS else 0L
+            if ((got && elapsed >= minBurst) || elapsed >= MAX_BURST_MS || !burst) {
+                if (burst) disconnect()
+                handler.postDelayed(tick, max(1L, 1000L / fps - elapsed))
+            } else {
+                handler.postDelayed(this, BURST_POLL_MS)
+            }
+        }
+    }
+
+    private fun readStandard(): Boolean {
+        val r = reader ?: return false
         val img = try {
             r.acquireLatestImage()
         } catch (e: Exception) {
             null
-        } ?: return
+        } ?: return false
         try {
             val plane = img.planes[0]
             val buf = plane.buffer
@@ -311,13 +431,14 @@ class ScreenCapturer(
                 }
             }
             sink(rgb, w, h, System.nanoTime())
+            return true
         } finally {
             img.close()
         }
     }
 
-    private fun readCodec() {
-        val enc = encoder ?: return
+    private fun readCodec(): Boolean {
+        val enc = encoder ?: return false
         // 1. Move every finished encoded frame into the decoder.
         while (true) {
             val idx = enc.dequeueOutputBuffer(encInfo, 0)
@@ -349,7 +470,7 @@ class ScreenCapturer(
         }
 
         // 2. Keep only the newest decoded picture.
-        val dec = decoder ?: return
+        val dec = decoder ?: return false
         var newest = -1
         while (true) {
             val idx = dec.dequeueOutputBuffer(decInfo, 0)
@@ -363,14 +484,18 @@ class ScreenCapturer(
                 newest = -1
             }
         }
-        if (newest < 0) return
+        if (newest < 0) return false
         val img = try {
             dec.getOutputImage(newest)
         } catch (e: Exception) {
             null
         }
         try {
-            if (img != null && yuvToRgb(img)) sink(rgb, outW, outH, System.nanoTime())
+            if (img != null && yuvToRgb(img)) {
+                sink(rgb, outW, outH, System.nanoTime())
+                return true
+            }
+            return false
         } finally {
             img?.close()
             dec.releaseOutputBuffer(newest, false)
