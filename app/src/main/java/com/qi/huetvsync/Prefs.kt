@@ -4,6 +4,7 @@ import android.content.Context
 
 /** Everything the sync loop needs to know about how to process colors. */
 data class Tuning(
+    val captureMethod: Int,
     val fps: Int,
     val sizeIndex: Int,
     val smoothingMs: Int,
@@ -22,6 +23,8 @@ class Prefs(context: Context) {
         val CAPTURE_SIZES = intArrayOf(32, 64, 128)
         val CAPTURE_SIZE_NAMES = arrayOf("Small", "Medium", "Large")
         val LAYOUT_NAMES = arrayOf("Auto (from Hue area)", "Strip order", "Strip order, reversed")
+        val CAPTURE_METHOD_NAMES = arrayOf("Standard", "Codec")
+        val FPS_STEPS = intArrayOf(2, 5, 10, 15, 20, 25, 30)
     }
 
     private val sp = context.applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -47,9 +50,12 @@ class Prefs(context: Context) {
         get() = str("areaName")
         set(v) = putStr("areaName", v)
 
+    var captureMethod: Int
+        get() = sp.getInt("captureMethod", 0)
+        set(v) = putInt("captureMethod", v.coerceIn(0, CAPTURE_METHOD_NAMES.size - 1))
     var fps: Int
         get() = sp.getInt("fps", 15)
-        set(v) = putInt("fps", v.coerceIn(5, 30))
+        set(v) = putInt("fps", v.coerceIn(2, 30))
     var sizeIndex: Int
         get() = sp.getInt("sizeIndex", 0)
         set(v) = putInt("sizeIndex", v.coerceIn(0, CAPTURE_SIZES.size - 1))
@@ -87,6 +93,7 @@ class Prefs(context: Context) {
         get() = isPaired && areaId.isNotEmpty()
 
     fun tuning() = Tuning(
+        captureMethod = captureMethod,
         fps = fps,
         sizeIndex = sizeIndex,
         smoothingMs = smoothingMs,

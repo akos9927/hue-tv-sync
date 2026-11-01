@@ -18,6 +18,8 @@ object SyncState {
     @Volatile var updateStatus: String? = null
     /** Index of the segment lit by the layout test, or -1. */
     @Volatile var testChannel = -1
+    /** Which capture method and size is running, shown under the status. */
+    @Volatile var captureInfo = ""
 }
 
 /** A short, readable message for an exception. */

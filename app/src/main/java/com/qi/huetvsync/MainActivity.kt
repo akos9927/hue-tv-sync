@@ -164,8 +164,14 @@ class MainActivity : Activity() {
             setPadding(dp(32), 0, 0, 0)
         }
         right.addView(sectionTitle("Settings").apply { setPadding(0, dp(4), 0, dp(6)) })
+        right.addView(stepper("Capture method", "Codec uses the TV's video chip. Try it if 4K video stutters.",
+            { Prefs.CAPTURE_METHOD_NAMES[prefs.captureMethod] },
+            { prefs.captureMethod = (prefs.captureMethod + 1) % Prefs.CAPTURE_METHOD_NAMES.size },
+            { prefs.captureMethod = (prefs.captureMethod + 1) % Prefs.CAPTURE_METHOD_NAMES.size }))
         right.addView(stepper("Capture rate", "Higher is livelier but more work for the TV.",
-            { "${prefs.fps} fps" }, { prefs.fps -= 5 }, { prefs.fps += 5 }))
+            { "${prefs.fps} fps" },
+            { prefs.fps = Prefs.FPS_STEPS.lastOrNull { it < prefs.fps } ?: Prefs.FPS_STEPS.first() },
+            { prefs.fps = Prefs.FPS_STEPS.firstOrNull { it > prefs.fps } ?: Prefs.FPS_STEPS.last() }))
         right.addView(stepper("Capture quality", "Small is plenty for 7 segments and lightest on 4K.",
             { Prefs.CAPTURE_SIZE_NAMES[prefs.sizeIndex] }, { prefs.sizeIndex -= 1 }, { prefs.sizeIndex += 1 }))
         right.addView(stepper("Smoothing", "Lower reacts faster, higher is calmer.",
@@ -229,10 +235,7 @@ class MainActivity : Activity() {
     private fun applyTuning() {
         val t = prefs.tuning()
         SyncState.engine?.updateTuning(t)
-        SyncState.capturer?.let {
-            it.setFps(t.fps)
-            it.setSize(Prefs.CAPTURE_SIZES[t.sizeIndex])
-        }
+        SyncState.capturer?.configure(t.captureMethod, t.sizeIndex, t.fps)
     }
 
     // ------------------------------------------------------------------ live status
@@ -240,7 +243,8 @@ class MainActivity : Activity() {
     private fun refreshLive() {
         statusText.text = SyncState.status
         statsText.text = if (SyncState.running) {
-            String.format("Screen: %.0f fps  ·  To bridge: %.0f updates/s", SyncState.captureFps, SyncState.sendFps)
+            String.format("Screen: %.0f fps  ·  To bridge: %.0f updates/s", SyncState.captureFps, SyncState.sendFps) +
+                (if (SyncState.captureInfo.isNotEmpty()) "\n${SyncState.captureInfo}" else "")
         } else ""
         val err = SyncState.error
         errorText.visibility = if (err == null) View.GONE else View.VISIBLE
