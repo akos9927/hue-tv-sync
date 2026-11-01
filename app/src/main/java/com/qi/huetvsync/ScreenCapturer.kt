@@ -373,7 +373,7 @@ class ScreenCapturer(
     }
 
     /** Runs once per frame interval: either reads the continuous copy, or starts a burst. */
-    private val tick = object : Runnable {
+    private val tick: Runnable = object : Runnable {
         override fun run() {
             if (!running) return
             val start = SystemClock.uptimeMillis()
@@ -391,7 +391,7 @@ class ScreenCapturer(
     }
 
     /** During a burst: read until a fresh frame arrives, then disconnect until the next interval. */
-    private val burstPoll = object : Runnable {
+    private val burstPoll: Runnable = object : Runnable {
         override fun run() {
             if (!running) return
             val got = safeRead()
