@@ -1,0 +1,67 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      # The real signing key lives in two repository secrets. Without them, the app is still
+      # built (to catch errors) with a throwaway key, but not published.
+      - name: Prepare signing key
+        id: signing
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+        run: |
+          if [ -n "$SIGNING_KEYSTORE_BASE64" ] && [ -n "$SIGNING_STORE_PASSWORD" ]; then
+            echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Signing secrets are missing, so this build is checked but not published."
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -storetype PKCS12 -alias huetvsync \
+              -keyalg RSA -keysize 2048 -validity 30 -storepass throwaway -keypass throwaway \
+              -dname "CN=Throwaway"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the app
+        env:
+          SIGNING_STORE_FILE: ${{ runner.temp }}/release.jks
+          SIGNING_STORE_PASSWORD: ${{ steps.signing.outputs.publish == 'true' && secrets.SIGNING_STORE_PASSWORD || 'throwaway' }}
+          SIGNING_KEY_ALIAS: huetvsync
+          SIGNING_KEY_PASSWORD: ${{ steps.signing.outputs.publish == 'true' && secrets.SIGNING_STORE_PASSWORD || 'throwaway' }}
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Publish the app as a GitHub release
+        if: steps.signing.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk HueTVSync.apk
+          gh release create "build-${{ github.run_number }}" HueTVSync.apk \
+            --title "Build ${{ github.run_number }}" \
+            --notes "${COMMIT_MESSAGE:-Manual build}" \
+            --target "${{ github.sha }}"
